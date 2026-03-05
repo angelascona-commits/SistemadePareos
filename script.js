@@ -1,21 +1,58 @@
-
 document.getElementById('btnProcesar').addEventListener('click', procesarArchivos);
 
-function limpiarTexto(texto) {
-    if (texto === undefined || texto === null) return "";
+function limpiarTextoBase(texto) {
+    if (!texto) return "";
     let t = String(texto).toUpperCase();
-    t = t.replace(/[\n\r]/g, ' '); 
-    if (t.endsWith('.0')) t = t.slice(0, -2); 
     t = t.normalize("NFD").replace(/[\u0300-\u036f]/g, ""); 
-    t = t.replace(/\s+/g, ' ').trim(); 
-    return t;
+    return t.replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim(); 
+}
+
+function extraerPalabrasClave(texto) {
+    let originalLimpio = limpiarTextoBase(texto);
+    if (!originalLimpio) return "";
+
+    const palabrasInnecesarias = [
+        "S A C", "SAC", "S R L", "SRL", "E I R L", "EIRL", "S A", "SA", "S C R L", "SCRL", "C I A", "CIA",
+        "SEDE", "CLINICA", "CENTRO", "MEDICO", "POLICLINICO", "ODONTOLOGICO", "DENTAL", "CONSULTORIO", 
+        "HOSPITAL", "RED", "DE", "LA", "LAS", "LOS", "EL", "Y", "EN", "DEL", "SUCURSAL"
+    ];
+
+    let t = originalLimpio;
+    const regex = new RegExp('\\b(' + palabrasInnecesarias.join('|') + ')\\b', 'g');
+    t = t.replace(regex, ' ').replace(/\s+/g, ' ').trim();
+
+    if (t === "") return originalLimpio;
+    return t; 
+}
+
+function limpiarDireccion(texto) {
+    if (!texto) return "";
+    let t = limpiarTextoBase(texto);
+    t = t.replace(/\b(AV|AVENIDA|CALLE|CLL|JIRON|JR|MZ|MANZANA|LT|LOTE|N|NO|NRO|NUMERO|URB|URBANIZACION|KM|CARRETERA|PISO|LOCAL|INTERIOR|INT|PZ|PLAZA)\b/g, ' ');
+    // Ahora mantenemos los espacios para comparar palabras exactas en lugar de pegar todo
+    return t.replace(/\s+/g, ' ').trim(); 
+}
+
+// NUEVO: Función a prueba de balas para cruzar palabras exactas
+function coincidenciaSegura(t1, t2) {
+    if (!t1 || !t2) return false;
+    if (t1 === t2) return true;
+    
+    let palabras1 = t1.split(' ');
+    let palabras2 = t2.split(' ');
+
+    // Revisa si TODAS las palabras de t1 están en t2, o viceversa
+    let t1EnT2 = palabras1.every(palabra => palabras2.includes(palabra));
+    let t2EnT1 = palabras2.every(palabra => palabras1.includes(palabra));
+
+    return t1EnT2 || t2EnT1;
 }
 
 function estandarizarFila(fila) {
-    let filaLimpia = {};
+    let filaLimpia = { ...fila };
     for (let key in fila) {
-        let nuevaKey = key.trim().toUpperCase();
-        filaLimpia[nuevaKey] = fila[key];
+        let keyIndestructible = key.toUpperCase().replace(/[^A-Z]/g, ''); 
+        filaLimpia[keyIndestructible] = fila[key];
     }
     return filaLimpia;
 }
@@ -23,33 +60,26 @@ function estandarizarFila(fila) {
 function extraerDatosDinamicos(worksheet) {
     const matrizDatos = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
     let filaCabecera = 0;
-    
     for (let i = 0; i < matrizDatos.length; i++) {
-        let textoFila = matrizDatos[i].join(" ").toUpperCase();
-        if (textoFila.includes("NOMBRE COMERCIAL") || textoFila.includes("SNOMBRE_COMERCIAL")) {
+        let textoFila = matrizDatos[i].join("").toUpperCase().replace(/[^A-Z]/g, '');
+        if (textoFila.includes("NOMBRECOMERCIAL") || textoFila.includes("SNOMBRECOMERCIAL")) {
             filaCabecera = i;
             break;
         }
     }
-    
     return XLSX.utils.sheet_to_json(worksheet, { range: filaCabecera, defval: "" });
 }
 
 async function obtenerDatosGoogleSheets(url) {
     const match = url.match(/\/d\/([a-zA-Z0-9-_]+)/);
     if (!match) throw new Error("URL de Google Sheets no válida.");
-    
     const id = match[1];
     const urlCsv = `https://docs.google.com/spreadsheets/d/${id}/export?format=csv`;
-    
     const respuesta = await fetch(urlCsv);
-    if (!respuesta.ok) throw new Error("No se pudo leer el Google Sheet. Verifica los permisos.");
-    
+    if (!respuesta.ok) throw new Error("No se pudo leer el Google Sheet.");
     const csvTexto = await respuesta.text();
     const workbook = XLSX.read(csvTexto, {type: 'string'});
-    const worksheet = workbook.Sheets[workbook.SheetNames[0]];
-    
-    return extraerDatosDinamicos(worksheet);
+    return extraerDatosDinamicos(workbook.Sheets[workbook.SheetNames[0]]);
 }
 
 function leerExcelLocal(file) {
@@ -58,9 +88,7 @@ function leerExcelLocal(file) {
         reader.onload = (e) => {
             const data = new Uint8Array(e.target.result);
             const workbook = XLSX.read(data, {type: 'array'});
-            const worksheet = workbook.Sheets[workbook.SheetNames[0]];
-            const json = extraerDatosDinamicos(worksheet); 
-            resolve(json);
+            resolve(extraerDatosDinamicos(workbook.Sheets[workbook.SheetNames[0]]));
         };
         reader.onerror = (error) => reject(error);
         reader.readAsArrayBuffer(file);
@@ -79,82 +107,144 @@ async function procesarArchivos() {
     }
 
     btn.disabled = true;
-    btn.innerText = "Comparando Nombres Comerciales...";
+    btn.innerText = "Estandarizando y analizando...";
     msj.innerText = "";
 
     try {
         let dataBaseBruta = await obtenerDatosGoogleSheets(urlSheet);
-        let dataNuevaBruta = await leerExcelLocal(fileNuevo);
-
-        let baseMap = new Map();
-        let nuevaMap = new Map();
-
-        dataBaseBruta.forEach(filaBruta => {
-            let fila = estandarizarFila(filaBruta);
-            let nombreBD = limpiarTexto(fila['SNOMBRE_COMERCIAL']);
-            let distritoBD = limpiarTexto(fila['SDISTRITO']); 
-
+        let listaBD = [];
+        dataBaseBruta.forEach(fila => {
+            let filaEst = estandarizarFila(fila);
+            let nombreBD = filaEst['SNOMBRECOMERCIAL'] || filaEst['NOMBRECOMERCIAL']; 
             if (nombreBD) {
-                let huella = `${nombreBD}|${distritoBD}`;
-                baseMap.set(huella, fila);
+                listaBD.push({
+                    datosOriginales: fila,
+                    nombreClave: extraerPalabrasClave(nombreBD),
+                    distrito: limpiarTextoBase(filaEst['SDISTRITO'] || filaEst['DISTRITO']),
+                    direccionClave: limpiarDireccion(filaEst['SDIRECCION'] || filaEst['DIRECCION'])
+                });
             }
         });
 
-        dataNuevaBruta.forEach(filaBruta => {
-            let fila = estandarizarFila(filaBruta);
-            let nombreNuevo = limpiarTexto(fila['NOMBRE COMERCIAL']);
-            let distritoNuevo = limpiarTexto(fila['DISTRITO']);
-
-            if (nombreNuevo && nombreNuevo !== "LIMA Y CALLAO" && nombreNuevo !== "PROVINCIAS") {
-                let huella = `${nombreNuevo}|${distritoNuevo}`;
-                nuevaMap.set(huella, filaBruta);
+        let dataNuevaBruta = await leerExcelLocal(fileNuevo);
+        let listaNueva = [];
+        dataNuevaBruta.forEach(fila => {
+            let filaEst = estandarizarFila(fila);
+            let nombre = filaEst['NOMBRECOMERCIAL'];
+            if (nombre && limpiarTextoBase(nombre) !== "LIMA Y CALLAO" && limpiarTextoBase(nombre) !== "PROVINCIAS") {
+                listaNueva.push({
+                    datosOriginales: fila,
+                    nombreClave: extraerPalabrasClave(nombre),
+                    distrito: limpiarTextoBase(filaEst['DISTRITO']),
+                    direccionClave: limpiarDireccion(filaEst['DIRECCION'])
+                });
             }
         });
 
         let mantiene = [];
         let agregados = [];
         let eliminados = [];
+        let duplicadosExcel = [];
+        let duplicadosBD = [];
 
-        nuevaMap.forEach((filaOriginal, huella) => {
-            let filaFinal = { ...filaOriginal };
-            if (baseMap.has(huella)) {
-                filaFinal['ESTADO'] = 'MANTIENE';
+        let firmasProcesadasExcel = new Set();
+        let firmasProcesadasBD = new Set();
+
+        for (let i = 0; i < listaNueva.length; i++) {
+            let itemNuevo = listaNueva[i];
+            let firmaNuevo = itemNuevo.nombreClave + "|" + itemNuevo.distrito; 
+            let posibles = [];
+
+            for (let j = 0; j < listaBD.length; j++) {
+                let nomBD = listaBD[j].nombreClave;
+                let nomNu = itemNuevo.nombreClave;
+                // USAMOS LA NUEVA FUNCIÓN DE COINCIDENCIA SEGURA
+                if (coincidenciaSegura(nomBD, nomNu)) {
+                    posibles.push(j);
+                }
+            }
+
+            if (posibles.length === 0 && itemNuevo.direccionClave.length > 5) {
+                for (let j = 0; j < listaBD.length; j++) {
+                    let dirBD = listaBD[j].direccionClave;
+                    let dirNu = itemNuevo.direccionClave;
+                    if (coincidenciaSegura(dirBD, dirNu)) {
+                        posibles.push(j);
+                    }
+                }
+            }
+
+            if (posibles.length > 1) {
+                let desempateDistrito = posibles.filter(idx => listaBD[idx].distrito === itemNuevo.distrito);
+                if (desempateDistrito.length > 0) posibles = desempateDistrito; 
+            }
+
+            if (posibles.length > 1) {
+                let desempateDireccion = posibles.filter(idx => coincidenciaSegura(listaBD[idx].direccionClave, itemNuevo.direccionClave));
+                if (desempateDireccion.length > 0) posibles = desempateDireccion;
+            }
+
+            if (posibles.length > 0) {
+                let matchFinalIndex = posibles[0];
+                let itemBD = listaBD[matchFinalIndex];
+                let firmaBD = itemBD.nombreClave + "|" + itemBD.distrito;
+
+                let filaFinal = { ...itemNuevo.datosOriginales, 'ESTADO': 'MANTIENE' };
                 mantiene.push(filaFinal);
+                
+                firmasProcesadasExcel.add(firmaNuevo);
+                firmasProcesadasBD.add(firmaBD);
+
+                listaBD.splice(matchFinalIndex, 1); 
             } else {
-                filaFinal['ESTADO'] = 'AGREGADO';
-                agregados.push(filaFinal);
+                if (firmasProcesadasExcel.has(firmaNuevo)) {
+                    let filaFinal = { ...itemNuevo.datosOriginales, 'ESTADO': 'DUPLICADO EXCEL' };
+                    duplicadosExcel.push(filaFinal);
+                } else {
+                    let filaFinal = { ...itemNuevo.datosOriginales, 'ESTADO': 'AGREGADO' };
+                    agregados.push(filaFinal);
+                    firmasProcesadasExcel.add(firmaNuevo);
+                }
+            }
+        }
+
+        listaBD.forEach(itemBD => {
+            let firmaBD = itemBD.nombreClave + "|" + itemBD.distrito;
+            
+            if (firmasProcesadasBD.has(firmaBD)) {
+                let filaFinal = { ...itemBD.datosOriginales, 'ESTADO': 'DUPLICADO BD' };
+                duplicadosBD.push(filaFinal);
+            } else {
+                let filaFinal = { ...itemBD.datosOriginales, 'ESTADO': 'ELIMINADO' };
+                eliminados.push(filaFinal);
+                firmasProcesadasBD.add(firmaBD);
             }
         });
 
-        baseMap.forEach((filaBD, huella) => {
-            if (!nuevaMap.has(huella)) { 
-                let filaEliminada = {
-                    'NOMBRE COMERCIAL': filaBD['SNOMBRE_COMERCIAL'],
-                    'DISTRITO': filaBD['SDISTRITO'],
-                    'DIRECCION': filaBD['SDIRECCION'],
-                    'TELEFONO': filaBD['STELEFONO'],
-                    'ESTADO': 'ELIMINADO'
-                };
-                eliminados.push(filaEliminada);
-            }
+        let resultadoFinal = [...mantiene, ...agregados, ...eliminados, ...duplicadosExcel, ...duplicadosBD];
+
+        let limaCallaoData = resultadoFinal.filter(f => {
+            let d = limpiarTextoBase(f['DEPARTAMENTO'] || f['SDEPARTAMENTO']);
+            return d === 'LIMA' || d === 'CALLAO';
+        });
+        let provinciasData = resultadoFinal.filter(f => {
+            let d = limpiarTextoBase(f['DEPARTAMENTO'] || f['SDEPARTAMENTO']);
+            return d !== 'LIMA' && d !== 'CALLAO';
         });
 
-        let resultadoFinal = [...mantiene, ...agregados, ...eliminados];
-
-        if (resultadoFinal.length === 0) throw new Error("No se encontraron datos.");
-
-        const ws = XLSX.utils.json_to_sheet(resultadoFinal);
         const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, "Resultados");
+        if (limaCallaoData.length > 0) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(limaCallaoData), "LIMA Y CALLAO");
+        if (provinciasData.length > 0) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(provinciasData), "PROVINCIAS");
+
         XLSX.writeFile(wb, "Reporte_Actualizado.xlsx");
 
         msj.style.color = "#27ae60";
-        msj.innerText = ` Mantiene: ${mantiene.length} | Agregados: ${agregados.length} | Eliminados: ${eliminados.length}`;
+        msj.innerText = `¡Pareo Exitoso!\nMantiene: ${mantiene.length} | Agregados: ${agregados.length} | Eliminados: ${eliminados.length}\n⚠️ Duplicados en Excel: ${duplicadosExcel.length} | Duplicados en BD: ${duplicadosBD.length}`;
 
     } catch (error) {
         console.error(error);
         msj.style.color = "#c0392b";
-        msj.innerText = " Error: " + error.message;
+        msj.innerText = "❌ Error: " + error.message;
     } finally {
         btn.disabled = false;
         btn.innerText = "Comparar y Descargar Resultados";
