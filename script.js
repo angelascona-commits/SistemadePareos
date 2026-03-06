@@ -29,11 +29,10 @@ function limpiarDireccion(texto) {
     if (!texto) return "";
     let t = limpiarTextoBase(texto);
     t = t.replace(/\b(AV|AVENIDA|CALLE|CLL|JIRON|JR|MZ|MANZANA|LT|LOTE|N|NO|NRO|NUMERO|URB|URBANIZACION|KM|CARRETERA|PISO|LOCAL|INTERIOR|INT|PZ|PLAZA)\b/g, ' ');
-    // Ahora mantenemos los espacios para comparar palabras exactas en lugar de pegar todo
+    
     return t.replace(/\s+/g, ' ').trim(); 
 }
 
-// NUEVO: Función a prueba de balas para cruzar palabras exactas
 function coincidenciaSegura(t1, t2) {
     if (!t1 || !t2) return false;
     if (t1 === t2) return true;
@@ -41,7 +40,6 @@ function coincidenciaSegura(t1, t2) {
     let palabras1 = t1.split(' ');
     let palabras2 = t2.split(' ');
 
-    // Revisa si TODAS las palabras de t1 están en t2, o viceversa
     let t1EnT2 = palabras1.every(palabra => palabras2.includes(palabra));
     let t2EnT1 = palabras2.every(palabra => palabras1.includes(palabra));
 
@@ -102,7 +100,7 @@ async function procesarArchivos() {
     const msj = document.getElementById('mensaje');
 
     if (!urlSheet || !fileNuevo) {
-        msj.innerText = "⚠️ Faltan datos (URL o Archivo).";
+        msj.innerText = "Faltan datos (URL o Archivo).";
         return;
     }
 
@@ -158,7 +156,6 @@ async function procesarArchivos() {
             for (let j = 0; j < listaBD.length; j++) {
                 let nomBD = listaBD[j].nombreClave;
                 let nomNu = itemNuevo.nombreClave;
-                // USAMOS LA NUEVA FUNCIÓN DE COINCIDENCIA SEGURA
                 if (coincidenciaSegura(nomBD, nomNu)) {
                     posibles.push(j);
                 }
@@ -239,12 +236,12 @@ async function procesarArchivos() {
         XLSX.writeFile(wb, "Reporte_Actualizado.xlsx");
 
         msj.style.color = "#27ae60";
-        msj.innerText = `¡Pareo Exitoso!\nMantiene: ${mantiene.length} | Agregados: ${agregados.length} | Eliminados: ${eliminados.length}\n⚠️ Duplicados en Excel: ${duplicadosExcel.length} | Duplicados en BD: ${duplicadosBD.length}`;
+        msj.innerText = `Pareo Exitoso \nMantiene: ${mantiene.length} | Agregados: ${agregados.length} | Eliminados: ${eliminados.length}\n⚠️ Duplicados en Excel: ${duplicadosExcel.length} | Duplicados en BD: ${duplicadosBD.length}`;
 
     } catch (error) {
         console.error(error);
         msj.style.color = "#c0392b";
-        msj.innerText = "❌ Error: " + error.message;
+        msj.innerText = " Error: " + error.message;
     } finally {
         btn.disabled = false;
         btn.innerText = "Comparar y Descargar Resultados";
